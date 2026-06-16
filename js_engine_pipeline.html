@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JavaScript Engine Pipeline</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #ffffff;
+    --bg2: #f5f4f0;
+    --bg3: #eeedea;
+    --text: #1a1a18;
+    --text2: #5f5e5a;
+    --text3: #888780;
+    --border: rgba(0,0,0,0.10);
+    --border2: rgba(0,0,0,0.18);
+    --purple-bg: #EEEDFE;
+    --purple-border: #534AB7;
+    --purple-text: #3C3489;
+    --teal-bg: #E1F5EE;
+    --teal-border: #0F6E56;
+    --teal-text: #085041;
+    --amber-bg: #FAEEDA;
+    --amber-border: #BA7517;
+    --amber-text: #633806;
+    --coral-bg: #FAECE7;
+    --coral-border: #993C1D;
+    --coral-text: #712B13;
+    --green-bg: #EAF3DE;
+    --green-border: #3B6D11;
+    --green-text: #27500A;
+    --accent: #534AB7;
+    --accent-done: #0F6E56;
+    --font-mono: 'Courier New', Courier, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1a;
+      --bg2: #252523;
+      --bg3: #2e2e2b;
+      --text: #e8e6df;
+      --text2: #9c9a92;
+      --text3: #6b6a64;
+      --border: rgba(255,255,255,0.10);
+      --border2: rgba(255,255,255,0.18);
+      --purple-bg: #26215C;
+      --purple-border: #7F77DD;
+      --purple-text: #CECBF6;
+      --teal-bg: #04342C;
+      --teal-border: #1D9E75;
+      --teal-text: #9FE1CB;
+      --amber-bg: #412402;
+      --amber-border: #EF9F27;
+      --amber-text: #FAC775;
+      --coral-bg: #4A1B0C;
+      --coral-border: #D85A30;
+      --coral-text: #F5C4B3;
+      --green-bg: #173404;
+      --green-border: #639922;
+      --green-text: #C0DD97;
+      --accent: #7F77DD;
+      --accent-done: #1D9E75;
+    }
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  header {
+    border-bottom: 0.5px solid var(--border);
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 100;
+  }
+
+  header h1 {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  header span {
+    font-size: 12px;
+    color: var(--text3);
+  }
+
+  .layout {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  .intro {
+    margin-bottom: 40px;
+  }
+
+  .intro h2 {
+    font-size: 22px;
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+
+  .intro p {
+    font-size: 14px;
+    color: var(--text2);
+    max-width: 560px;
+  }
+
+  .stage-track {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+    margin-bottom: 32px;
+  }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 148px 1fr;
+    min-height: 72px;
+    opacity: 0.25;
+    transition: opacity 0.4s ease;
+    position: relative;
+  }
+
+  .stage.active { opacity: 1; }
+  .stage.done { opacity: 0.5; }
+
+  .stage-left {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    padding: 14px 18px 14px 0;
+    gap: 3px;
+  }
+
+  .stage-phase {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text3);
+  }
+
+  .stage-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text2);
+    text-align: right;
+    line-height: 1.3;
+  }
+
+  .stage-right {
+    border-left: 2px solid var(--border);
+    padding: 14px 0 14px 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+    transition: border-color 0.3s;
+  }
+
+  .stage.active .stage-right { border-color: var(--accent); }
+  .stage.done .stage-right { border-color: var(--accent-done); }
+
+  .connector-dot {
+    position: absolute;
+    left: 143px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--border2);
+    border: 2px solid var(--bg);
+    transition: background 0.3s, transform 0.3s;
+    z-index: 2;
+  }
+
+  .stage.active .connector-dot {
+    background: var(--accent);
+    transform: translateY(-50%) scale(1.35);
+  }
+
+  .stage.done .connector-dot {
+    background: var(--accent-done);
+    transform: translateY(-50%) scale(1);
+  }
+
+  .token-row {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .tok {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg2);
+    border: 0.5px solid var(--border2);
+    color: var(--text2);
+    opacity: 0;
+    transform: translateY(5px);
+    transition: opacity 0.2s, transform 0.2s;
+  }
+
+  .tok.show { opacity: 1; transform: translateY(0); }
+  .tok.hi-teal  { background: var(--teal-bg);   border-color: var(--teal-border);   color: var(--teal-text); }
+  .tok.hi-purple{ background: var(--purple-bg);  border-color: var(--purple-border); color: var(--purple-text); }
+  .tok.hi-amber { background: var(--amber-bg);   border-color: var(--amber-border);  color: var(--amber-text); }
+  .tok.hi-coral { background: var(--coral-bg);   border-color: var(--coral-border);  color: var(--coral-text); }
+  .tok.hi-green { background: var(--green-bg);   border-color: var(--green-border);  color: var(--green-text); }
+
+  .ast-mini { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .ast-row  { display: flex; gap: 8px; align-items: center; }
+
+  .ast-node {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    padding: 3px 9px;
+    border-radius: 4px;
+    background: var(--purple-bg);
+    border: 0.5px solid var(--purple-border);
+    color: var(--purple-text);
+    opacity: 0;
+    transition: opacity 0.25s;
+  }
+
+  .ast-node.show { opacity: 1; }
+
+  .ast-line {
+    width: 0.5px;
+    height: 10px;
+    background: var(--purple-border);
+    opacity: 0;
+    transition: opacity 0.25s;
+  }
+
+  .ast-line.show { opacity: 0.5; }
+  .ast-branch { display: flex; gap: 12px; }
+
+  .bc-row { display: flex; gap: 5px; flex-wrap: wrap; }
+
+  .bc {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    padding: 2px 7px;
+    border-radius: 3px;
+    background: var(--purple-bg);
+    border: 0.5px solid var(--purple-border);
+    color: var(--purple-text);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .bc.show { opacity: 1; }
+
+  .stage-desc {
+    font-size: 12px;
+    color: var(--text2);
+    line-height: 1.6;
+    max-width: 520px;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 20px 0 0;
+    border-top: 0.5px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    font-size: 13px;
+    padding: 8px 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    border: 0.5px solid var(--border2);
+    background: var(--bg);
+    color: var(--text);
+    font-family: inherit;
+    transition: background 0.15s, transform 0.1s;
+  }
+
+  .btn:hover { background: var(--bg2); }
+  .btn:active { transform: scale(0.97); }
+  .btn:disabled { opacity: 0.35; cursor: default; }
+
+  .btn.primary {
+    background: var(--accent);
+    color: #EEEDFE;
+    border-color: var(--accent);
+  }
+
+  .btn.primary:hover { opacity: 0.88; }
+
+  .progress-pills {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+    flex: 1;
+    justify-content: center;
+  }
+
+  .pill {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--border2);
+    transition: background 0.3s, width 0.3s, border-radius 0.3s;
+  }
+
+  .pill.done-pill { background: var(--accent-done); }
+  .pill.active-pill { background: var(--accent); width: 20px; border-radius: 3px; }
+
+  .speed-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+
+  .speed-row input[type=range] {
+    width: 64px;
+    accent-color: var(--accent);
+  }
+
+  .legend {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 0.5px solid var(--border);
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 600px) {
+    .stage { grid-template-columns: 110px 1fr; }
+    .connector-dot { left: 105px; }
+    header { padding: 14px 16px; }
+    .layout { padding: 24px 14px 60px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 style="font-size: 24px;">JavaScript engine pipeline</h1>
+  <span>V8 internals — step by step</span>
+</header>
+  <div class="controls">
+    <button class="btn" id="prevBtn" onclick="prev()">← Back</button>
+    <button class="btn primary" id="nextBtn" onclick="next()">Next →</button>
+    <div class="progress-pills" id="pills"></div>
+    <div class="speed-row">
+      Speed
+      <input type="range" min="1" max="3" value="2" step="1" oninput="setSpeed(this.value)" title="Animation speed">
+    </div>
+  </div>
+
+<div class="layout">
+  <div class="intro">
+    <h2>From source code to machine instructions</h2>
+    <p>Walk through every phase a JS engine executes — from raw byte ingestion through parsing, bytecode compilation, interpretation, profiling, and JIT optimization.</p>
+  </div>
+
+  <div class="stage-track" id="track"></div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#534AB7"></div>Active phase</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#0F6E56"></div>Completed</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#1D9E75;opacity:0.4"></div>Pending</div>
+  </div>
+</div>
+
+<script>
+const STAGES = [
+  {
+    phase: 'ingest',
+    label: 'Source code',
+    desc: 'The JS engine receives your script as a raw UTF-16 byte stream. No parsing has occurred — this is just bytes on the wire. Nothing is allocated in memory yet.',
+    render(el, reveal) {
+      const r = el.querySelector('.stage-right');
+      r.innerHTML = '<div class="token-row" id="src"></div><div class="stage-desc" style="margin-top:8px">' + this.desc + '</div>';
+      const src = document.getElementById('src');
+      const chars = ['v','a','r',' ','x',' ','=',' ','5',' ','+',' ','3',';'];
+      chars.forEach((c, i) => {
+        const t = document.createElement('span');
+        t.className = 'tok';
+        t.textContent = c === ' ' ? '·' : c;
+        src.appendChild(t);
+        setTimeout(() => t.classList.add('show'), reveal ? i * 60 : 0);
+      });
+    }
+  },
+  {
+    phase: 'parse',
+    label: 'Lexer / Scanner',
+    desc: 'The scanner reads the byte stream character by character and groups them into tokens. Whitespace is discarded. No grammar rules are checked here — this is purely lexical pattern matching.',
+    render(el, reveal) {
+      const r = el.querySelector('.stage-right');
+      r.innerHTML = '<div class="token-row" id="toks"></div><div class="stage-desc" style="margin-top:8px">' + this.desc + '</div>';
+      const toks = document.getElementById('toks');
+      const items = [
+        ['VAR', 'hi-teal'], ['IDENT(x)', 'hi-teal'],
+        ['ASSIGN', 'hi-purple'], ['NUM(5)', 'hi-amber'],
+        ['PLUS', 'hi-purple'], ['NUM(3)', 'hi-amber'],
+        ['SEMI', 'hi-purple']
+      ];
+      items.forEach(([t, c], i) => {
+        const el2 = document.createElement('span');
+        el2.className = 'tok ' + c;
+        el2.textContent = t;
+        toks.appendChild(el2);
+        setTimeout(() => el2.classList.add('show'), reveal ? i * 110 : 0);
+      });
+    }
+  },
+  {
+    phase: 'parse',
+    label: 'Parser → AST',
+    desc: 'The token stream is validated against the language grammar using recursive descent. A syntax tree is built — scope analysis and hoisting are resolved here. A SyntaxError thrown here halts everything below.',
+    render(el, reveal) {
+      const r = el.querySelector('.stage-right');
+      r.innerHTML = `<div class="ast-mini">
+        <div class="ast-row"><div class="ast-node" id="an0">AssignExpr</div></div>
+        <div class="ast-line" id="al0" style="height:9px"></div>
+        <div class="ast-branch">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+            <div class="ast-node" id="an1">Ident: x</div>
+          </div>
+          <div style="width:28px"></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+            <div class="ast-node" id="an2">BinaryExpr +</div>
+            <div class="ast-line" id="al1" style="height:9px"></div>
+            <div style="display:flex;gap:8px">
+              <div class="ast-node" id="an3">Num 5</div>
+              <div class="ast-node" id="an4">Num 3</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="stage-desc" style="margin-top:10px">${this.desc}</div>`;
+      const seq = ['an0','al0','an1','an2','al1','an3','an4'];
+      seq.forEach((id, i) => {
+        const node = document.getElementById(id);
+        setTimeout(() => node.classList.add('show'), reveal ? i * 130 : 0);
+      });
+    }
+  },
+  {
+    phase: 'compile',
+    label: 'Ignition compiler',
+    desc: 'Ignition walks the AST and emits compact register-based bytecode. This is also when the heap allocates memory for variables — the first actual memory allocation happens here.',
+    render(el, reveal) {
+      const r = el.querySelector('.stage-right');
+      r.innerHTML = '<div class="bc-row" id="bcr"></div><div class="stage-desc" style="margin-top:8px">' + this.desc + '</div>';
+      const bcr = document.getElementById('bcr');
+      const ops = ['LdaSmi [5]', 'Add r0', 'Star [x]', 'Return'];
+      ops.forEach((op, i) => {
+        const e = document.createElement('span');
+        e.className = 'bc';
+        e.textContent = op;
+        bcr.appendChild(e);
+        setTimeout(() => e.classList.add('show'), reveal ? i * 140 : 0);
+      });
+    }
+  },
+  {
+    phase: 'run',
+    label: 'Ignition interpreter',
+    desc: 'The interpreter executes bytecode instruction by instruction. Crucially, it attaches type feedback vectors to each operation — recording what concrete types actually flow through each site at runtime.',
+    render(el, reveal) {
+      const r = el.querySelector('.stage-right');
+      r.innerHTML = `<div style="display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap">
+        <div>
+          <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:5px">executing</div>
+          <div class="bc-row" id="bcr2" style="flex-direction:column;gap:4px"></div>
+        </div>
+        <div>
+          <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:5px">type feedback</div>
+          <div id="fb" style="display:flex;flex-direction:column;gap:4px"></div>
+        </div>
+      </div>
+      <div class="stage-desc" style="margin-top:10px">${this.desc}</div>`;
+      const ops = ['LdaSmi [5]', 'Add r0', 'Star [x]'];
+      const fbs = ['→ integer', '→ integer', '→ integer'];
+      const bcr2 = document.getElementById('bcr2');
+      const fb = document.getElementById('fb');
+      ops.forEach((op, i) => {
+        const e = document.createElement('span');
+        e.className = 'bc';
+        e.textContent = op;
+        bcr2.appendChild(e);
+        const f = document.createElement('span');
+        f.className = 'tok hi-green';
+        f.textContent = fbs[i];
+        fb.appendChild(f);
+        setTimeout(() => { e.classList.add('show'); f.classList.add('show'); }, reveal ? i * 180 : 0);
+      });
+    }
+  },
+  {
+    phase: 'run',
+    label: 'Profiler',
+    desc: 'The profiler tracks invocation counts. Once a function crosses the hot threshold (~1000–10000 calls), it is marked for optimizing compilation by TurboFan.',
+    render(el, reveal) {
+      const r = el.querySelector('.stage-right');
+      r.innerHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <div style="font-size:11px;color:var(--text3)">call count</div>
+        <div style="flex:1;height:6px;border-radius:3px;background:var(--bg3);overflow:hidden;max-width:220px">
+          <div id="cfill" style="height:100%;width:0;background:var(--amber-border);transition:width 0.06s linear;border-radius:3px"></div>
+        </div>
+        <div id="clbl" style="font-size:11px;font-family:var(--font-mono);color:var(--text2);min-width:32px">0</div>
+      </div>
+      <div id="hot" class="tok hi-amber" style="opacity:0;transition:opacity 0.4s;display:inline-flex">function is HOT — queued for TurboFan</div>
+      <div class="stage-desc" style="margin-top:10px">${this.desc}</div>`;
+      if (reveal) {
+        let n = 0;
+        const iv = setInterval(() => {
+          n += Math.floor(Math.random() * 10) + 7;
+          if (n >= 100) {
+            n = 100;
+            clearInterval(iv);
+            setTimeout(() => { document.getElementById('hot').style.opacity = '1'; }, 200);
+          }
+          document.getElementById('cfill').style.width = n + '%';
+          document.getElementById('clbl').textContent = Math.round(n * 92.3);
+        }, 55);
+      } else {
+        document.getElementById('cfill').style.width = '100%';
+        document.getElementById('clbl').textContent = '9230';
+        document.getElementById('hot').style.opacity = '1';
+      }
+    }
+  },
+  {
+    phase: 'optimize',
+    label: 'TurboFan JIT',
+    desc: 'TurboFan uses the collected type feedback to compile a specialized, optimized version. The generic bytecode Add becomes a single native integer ADD. If types ever change, TurboFan deoptimizes and falls back to Ignition.',
+    render(el, reveal) {
+      const r = el.querySelector('.stage-right');
+      r.innerHTML = `<div style="margin-bottom:8px">
+        <div style="font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text3);margin-bottom:5px">native x64 output</div>
+        <div class="bc-row" id="mcr"></div>
+      </div>
+      <div id="deopt" style="font-size:11px;color:var(--text3);opacity:0;transition:opacity 0.4s">
+        ↻ deopt path: if types change, bails back to Ignition interpreter
+      </div>
+      <div class="stage-desc" style="margin-top:8px">${this.desc}</div>`;
+      const ops = [['MOV eax, 5','hi-coral'],['ADD eax, 3','hi-coral'],['MOV [x], eax','hi-coral']];
+      const mcr = document.getElementById('mcr');
+      ops.forEach(([op, c], i) => {
+        const e = document.createElement('span');
+        e.className = 'tok ' + c;
+        e.textContent = op;
+        mcr.appendChild(e);
+        setTimeout(() => e.classList.add('show'), reveal ? i * 160 : 0);
+      });
+      setTimeout(() => { document.getElementById('deopt').style.opacity = '1'; }, reveal ? 1200 : 0);
+    }
+  },
+  {
+    phase: 'done',
+    label: 'CPU execution',
+    desc: 'Native machine code runs at full speed directly on the CPU. The variable x holds the value 8. Orinoco GC runs concurrently on a background thread, tracing and collecting unreachable heap objects without blocking.',
+    render(el, reveal) {
+      const r = el.querySelector('.stage-right');
+      r.innerHTML = `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span class="tok hi-green" style="opacity:1;font-size:14px;padding:4px 12px">x = 8</span>
+        <span style="font-size:12px;color:var(--text2)">value in register / heap slot</span>
+      </div>
+      <div id="gcnote" style="font-size:11px;color:var(--text3);opacity:0;transition:opacity 0.5s;margin-top:6px">
+        Orinoco GC running concurrently — background thread traces &amp; sweeps unreachable objects
+      </div>
+      <div class="stage-desc" style="margin-top:8px">${this.desc}</div>`;
+      setTimeout(() => { document.getElementById('gcnote').style.opacity = '1'; }, reveal ? 700 : 0);
+    }
+  }
+];
+
+let current = 0;
+
+function setSpeed(v) { /* speed is per-stage, kept for future use */ }
+
+function buildTrack() {
+  const track = document.getElementById('track');
+  track.innerHTML = '';
+  STAGES.forEach((s, i) => {
+    const div = document.createElement('div');
+    div.className = 'stage' + (i < current ? ' done' : i === current ? ' active' : '');
+    div.id = 'stage-' + i;
+    div.innerHTML = `
+      <div class="stage-left">
+        <div class="stage-phase">${s.phase}</div>
+        <div class="stage-label">${s.label}</div>
+      </div>
+      <div class="connector-dot"></div>
+      <div class="stage-right"></div>`;
+    track.appendChild(div);
+    s.render(div, i === current);
+  });
+  buildPills();
+  updateBtns();
+}
+
+function buildPills() {
+  const pills = document.getElementById('pills');
+  pills.innerHTML = '';
+  STAGES.forEach((_, i) => {
+    const p = document.createElement('div');
+    p.className = 'pill' + (i < current ? ' done-pill' : i === current ? ' active-pill' : '');
+    pills.appendChild(p);
+  });
+}
+
+function updateBtns() {
+  document.getElementById('prevBtn').disabled = current === 0;
+  document.getElementById('nextBtn').textContent = current === STAGES.length - 1 ? 'Restart →' : 'Next →';
+}
+
+function next() {
+  if (current === STAGES.length - 1) { current = 0; buildTrack(); return; }
+  const old = document.getElementById('stage-' + current);
+  old.classList.remove('active'); old.classList.add('done');
+  current++;
+  const neo = document.getElementById('stage-' + current);
+  neo.classList.add('active');
+  STAGES[current].render(neo, true);
+  buildPills(); updateBtns();
+  neo.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function prev() {
+  if (current === 0) return;
+  const old = document.getElementById('stage-' + current);
+  old.classList.remove('active');
+  current--;
+  const neo = document.getElementById('stage-' + current);
+  neo.classList.remove('done'); neo.classList.add('active');
+  STAGES[current].render(neo, false);
+  buildPills(); updateBtns();
+}
+
+buildTrack();
+</script>
+</body>
+</html>
